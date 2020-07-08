@@ -1,0 +1,67 @@
+---
+- name: This sets up an httpd webserver
+  hosts: all
+  vars_prompt:
+     - name: username
+       prompt: What is Your Name?
+  tasks:
+  - name: Install apache packages
+    shell: yum install -y httpd --releasever=7 --installroot=/app/apache
+  - name: setting up requirements
+    shell: |
+     useradd apache
+     chown apache:apache /app/apache
+     chown apache:apache /usr/lib/systemd/system/httpd.service
+     cd /app/apache/dev
+     rm -f null
+     mknod /app/apache/dev/null c 1 3
+     mknod /app/apache/dev/random c 1 8
+     mknod /app/apache/dev/urandom c 1 9
+     cp /app/apache/etc/sysconfig/httpd /etc/sysconfig/
+     cp /app/apache/usr/lib/systemd/system/httpd.service /usr/lib/systemd/system/
+     echo "
+     [Unit]
+     Description=The Apache HTTP Server
+     After=network.target remote-fs.target nss-lookup.target
+     Documentation=man:httpd(8)
+     Documentation=man:apachectl(8)
+
+     [Service]
+     Type=simple
+     EnvironmentFile=/etc/sysconfig/httpd
+     ExecStart=/sbin/chroot /app/apache /usr/sbin/httpd $OPTIONS -DFOREGROUND
+     ExecReload=/sbin/chroot /app/apache  /usr/sbin/httpd $OPTIONS -k graceful
+     ExecStop=/bin/kill -WINCH ${MAINPID}
+     # We want systemd to give httpd some time to finish gracefully, but still want
+     # it to kill httpd after TimeoutStopSec if something went wrong during the
+     # graceful stop. Normally, Systemd sends SIGTERM signal right after the
+     # ExecStop, which would kill httpd. We are sending useless SIGCONT here to give
+     # httpd time to finish.
+     KillSignal=SIGCONT
+     PrivateTmp=true
+
+     [Install]
+     WantedBy=multi-user.target
+     " >  /usr/lib/systemd/system/httpd.service
+     systemctl daemon-reload
+     systemctl enable httpd
+  - name: ensure httpd is running
+    service:
+      name: httpd
+      state: started
+  - name: Open port 80 for http access
+    firewalld:
+      service: http
+      permanent: true
+      state: enabled
+  - name: Restart the firewalld service to load in the firewall changes
+    service:
+      name: firewalld
+      state: restarted
+  - name: Depoly new webpage
+    template: src=/root/index.j2 dest=/app/apache/var/www/html/index.html
+    notify:
+       - Restart Apache
+  handlers:
+     - name: Restart Apache
+       service: name=httpd state=restarted
